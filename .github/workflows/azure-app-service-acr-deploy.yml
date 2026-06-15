@@ -1,0 +1,56 @@
+name: Build and Deploy to Azure App Service from ACR
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  ACR_NAME: myacr
+  ACR_LOGIN_SERVER: myacr.azurecr.io
+  IMAGE_NAME: my-first-app
+  WEBAPP_NAME: my-app-service
+  RESOURCE_GROUP: myResourceGroup
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 8
+
+      - name: Build with Maven
+        run: mvn -B package -DskipTests
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build and push image to ACR
+        run: |
+          IMAGE=${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker build -t $IMAGE .
+          docker push $IMAGE
+
+      - name: Deploy image to Azure App Service
+        run: |
+          IMAGE=${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          az webapp config container set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.WEBAPP_NAME }} \
+            --docker-custom-image-name $IMAGE \
+            --docker-registry-server-url https://{{ env.ACR_LOGIN_SERVER }}
+          az webapp restart --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.WEBAPP_NAME }}
