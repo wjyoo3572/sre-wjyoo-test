@@ -13,7 +13,7 @@ public class Application {
 
 	public String home() {
 
-		return "Hello, You are currently watching a demo of modernizing a Spring Boot app by leveraging Azure's container services";
+		return "test wjyoo";
 
 	}
 
