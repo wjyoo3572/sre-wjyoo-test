@@ -13,7 +13,7 @@ public class Application {
 
 	public String home() {
 
-		return "test 500 error wjyoo";
+		return "test wjyoo";
 
 	}
 
