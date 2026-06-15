@@ -1,0 +1,187 @@
+name: Roll back Azure App Service to previous ACR image
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_tag:
+        description: "Specific ACR tag to redeploy. Leave empty to pick the previous tag automatically."
+        required: false
+        type: string
+      failed_tag:
+        description: "Known bad tag to skip. Leave empty to use the tag currently running on the web app."
+        required: false
+        type: string
+      reason:
+        description: "Why the rollback is being triggered"
+        required: false
+        default: "manual rollback"
+        type: string
+  repository_dispatch:
+    types:
+      - auto-rollback-http5xx
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webappdemo202606-deploy
+  cancel-in-progress: false
+
+env:
+  ACR_NAME: wjyooacrdemo2026
+  ACR_LOGIN_SERVER: wjyooacrdemo2026.azurecr.io
+  IMAGE_NAME: web
+  WEBAPP_NAME: webappdemo202606
+  RESOURCE_GROUP: RG-Demo-CICD-202606
+  WEBAPP_RESOURCE_ID: /subscriptions/4a1b51c7-f3df-48fd-9bd9-85bbb9b88bc5/resourceGroups/RG-Demo-CICD-202606/providers/Microsoft.Web/sites/webappdemo202606
+  HTTP5XX_THRESHOLD: "5"
+  REQUESTED_TARGET_TAG: ${{ github.event.inputs.target_tag || github.event.client_payload.target_tag || '' }}
+  REQUESTED_FAILED_TAG: ${{ github.event.inputs.failed_tag || github.event.client_payload.failed_tag || '' }}
+  ROLLBACK_REASON: ${{ github.event.inputs.reason || github.event.client_payload.reason || 'manual rollback' }}
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Evaluate rollback conditions
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_linux_fx=$(az webapp config show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --query linuxFxVersion \
+            --output tsv)
+
+          current_image="${current_linux_fx#DOCKER|}"
+          current_tag="${current_image##*:}"
+          event_name="${GITHUB_EVENT_NAME}"
+
+          if [ "$event_name" != "schedule" ]; then
+            failed_tag="${REQUESTED_FAILED_TAG:-$current_tag}"
+            echo "should_rollback=true" >> "$GITHUB_OUTPUT"
+            echo "failed_tag=$failed_tag" >> "$GITHUB_OUTPUT"
+            echo "reason=${ROLLBACK_REASON}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest_registry_tag=$(az acr repository show-tags \
+            --name "$ACR_NAME" \
+            --repository "$IMAGE_NAME" \
+            --orderby time_desc \
+            --output tsv | head -n 1)
+
+          end_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          start_time=$(date -u -d '-10 minutes' +"%Y-%m-%dT%H:%M:%SZ")
+          http5xx_total=$(az monitor metrics list \
+            --resource "$WEBAPP_RESOURCE_ID" \
+            --metrics Http5xx \
+            --aggregation Total \
+            --interval PT5M \
+            --start-time "$start_time" \
+            --end-time "$end_time" \
+            --query "value[0].timeseries[0].data[-1].total" \
+            --output tsv)
+
+          http5xx_total=${http5xx_total:-0}
+          if [ "$http5xx_total" = "None" ] || [ -z "$http5xx_total" ]; then
+            http5xx_total=0
+          fi
+
+          if [ "$current_tag" = "$latest_registry_tag" ] && [ "$http5xx_total" -gt "$HTTP5XX_THRESHOLD" ]; then
+            echo "should_rollback=true" >> "$GITHUB_OUTPUT"
+            echo "failed_tag=$current_tag" >> "$GITHUB_OUTPUT"
+            echo "reason=auto rollback after Http5xx=${http5xx_total} in the latest 5-minute bucket" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_rollback=false" >> "$GITHUB_OUTPUT"
+            echo "failed_tag=$current_tag" >> "$GITHUB_OUTPUT"
+            echo "reason=skip auto rollback; current_tag=$current_tag latest_registry_tag=$latest_registry_tag http5xx_total=$http5xx_total threshold=$HTTP5XX_THRESHOLD" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip rollback
+        if: steps.guard.outputs.should_rollback != 'true'
+        run: echo "${{ steps.guard.outputs.reason }}"
+
+      - name: Resolve rollback tag
+        if: steps.guard.outputs.should_rollback == 'true'
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target_tag="${REQUESTED_TARGET_TAG}"
+          failed_tag="${REQUESTED_FAILED_TAG}"
+
+          if [ -z "$failed_tag" ]; then
+            failed_tag="${{ steps.guard.outputs.failed_tag }}"
+          fi
+
+          if [ -n "$target_tag" ]; then
+            rollback_tag="$target_tag"
+          else
+            rollback_tag=$(az acr repository show-tags \
+              --name "$ACR_NAME" \
+              --repository "$IMAGE_NAME" \
+              --orderby time_desc \
+              --output tsv | awk -v failed="$failed_tag" '$0 != failed { print; exit }')
+          fi
+
+          if [ -z "$rollback_tag" ]; then
+            echo "Unable to determine a rollback tag." >&2
+            exit 1
+          fi
+
+          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${rollback_tag}"
+
+          echo "failed_tag=$failed_tag" >> "$GITHUB_OUTPUT"
+          echo "rollback_tag=$rollback_tag" >> "$GITHUB_OUTPUT"
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
+
+          echo "Rolling back because: ${{ steps.guard.outputs.reason }}"
+          echo "Failed tag: ${failed_tag:-unknown}"
+          echo "Rollback tag: ${rollback_tag}"
+          echo "Image ref: ${image_ref}"
+
+      - name: Validate rollback image exists
+        if: steps.guard.outputs.should_rollback == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          az acr repository show \
+            --name "$ACR_NAME" \
+            --image "${IMAGE_NAME}:${{ steps.resolve.outputs.rollback_tag }}" \
+            --output none
+
+      - name: Re-deploy rollback image to Azure App Service
+        if: steps.guard.outputs.should_rollback == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          az webapp config container set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --docker-custom-image-name "${{ steps.resolve.outputs.image_ref }}" \
+            --docker-registry-server-url "https://${ACR_LOGIN_SERVER}"
+
+          az webapp restart \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME"
+
+      - name: Summarize rollback
+        if: steps.guard.outputs.should_rollback == 'true'
+        run: |
+          echo "Rollback completed for $WEBAPP_NAME"
+          echo "Reason: ${{ steps.guard.outputs.reason }}"
+          echo "Failed tag: ${{ steps.resolve.outputs.failed_tag || 'unknown' }}"
+          echo "Rollback tag: ${{ steps.resolve.outputs.rollback_tag }}"
+          echo "Image: ${{ steps.resolve.outputs.image_ref }}"

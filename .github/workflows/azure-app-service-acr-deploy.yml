@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webappdemo202606-deploy
+  cancel-in-progress: false
 
 env:
   ACR_NAME: wjyooacrdemo2026
