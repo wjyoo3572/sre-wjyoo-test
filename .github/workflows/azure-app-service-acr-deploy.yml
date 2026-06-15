@@ -6,11 +6,11 @@ on:
       - main
 
 env:
-  ACR_NAME: myacr
-  ACR_LOGIN_SERVER: myacr.azurecr.io
-  IMAGE_NAME: my-first-app
-  WEBAPP_NAME: my-app-service
-  RESOURCE_GROUP: myResourceGroup
+  ACR_NAME: acr4javacontappzerobig
+  ACR_LOGIN_SERVER: acr4javacontappzerobig.azurecr.io
+  IMAGE_NAME: web
+  WEBAPP_NAME: webappdemo202606
+  RESOURCE_GROUP: RG-Demo-CICD-202606
 
 jobs:
   build-and-deploy:
