@@ -6,8 +6,8 @@ on:
       - main
 
 env:
-  ACR_NAME: acr4javacontappzerobig
-  ACR_LOGIN_SERVER: acr4javacontappzerobig.azurecr.io
+  ACR_NAME: wjyooacrdemo2026
+  ACR_LOGIN_SERVER: wjyooacrdemo2026.azurecr.io
   IMAGE_NAME: web
   WEBAPP_NAME: webappdemo202606
   RESOURCE_GROUP: RG-Demo-CICD-202606
