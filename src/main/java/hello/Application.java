@@ -17,6 +17,11 @@ public class Application {
 
 	}
 
+	@RequestMapping("/error500")
+	public String error500() {
+		throw new RuntimeException("Force 500 error for SRE rollback test");
+	}
+
 	public static void main(String[] args) {
 		SpringApplication.run(Application.class, args);
 	}
