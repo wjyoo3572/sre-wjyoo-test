@@ -50,5 +50,5 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --name ${{ env.WEBAPP_NAME }} \
             --docker-custom-image-name $IMAGE \
-            --docker-registry-server-url https://{{ env.ACR_LOGIN_SERVER }}
+            --docker-registry-server-url https://${{ env.ACR_LOGIN_SERVER }}
           az webapp restart --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.WEBAPP_NAME }}
