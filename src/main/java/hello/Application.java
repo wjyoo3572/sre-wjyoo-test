@@ -13,13 +13,8 @@ public class Application {
 
 	public String home() {
 
-		return "test 500 errorwjyoo";
+		return "test wjyoo";
 
-	}
-
-	@RequestMapping("/error500")
-	public String error500() {
-		throw new RuntimeException("Force 500 error for SRE rollback test");
 	}
 
 	public static void main(String[] args) {
